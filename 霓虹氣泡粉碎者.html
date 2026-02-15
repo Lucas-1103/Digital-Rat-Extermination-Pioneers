@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>數位滅鼠先鋒 Pop It</title>
+    <style>
+        :root {
+            --bg-color: #2c3e50;
+            --toy-bg: #f0f0f0;
+            --shadow-light: rgba(255, 255, 255, 0.6);
+            --shadow-dark: rgba(0, 0, 0, 0.2);
+        }
+
+        body {
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: var(--bg-color);
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+            touch-action: none; /* 防止手機滑動 */
+        }
+
+        /* 玩具本體 */
+        .pop-it-board {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 15px;
+            padding: 25px;
+            background: var(--toy-bg);
+            border-radius: 30px;
+            box-shadow: 
+                10px 10px 30px var(--shadow-dark),
+                -10px -10px 30px rgba(255,255,255,0.1);
+            position: relative;
+            transform: scale(1);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* 翻轉動畫 */
+        .pop-it-board.flipping {
+            transform: scale(0.8) rotateY(180deg);
+            opacity: 0.5;
+        }
+
+        /* 氣泡按鈕 */
+        .bubble {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            cursor: pointer;
+            position: relative;
+            -webkit-tap-highlight-color: transparent;
+            transition: all 0.1s ease;
+            
+            /* 凸起狀態 (未按) */
+            box-shadow: 
+                inset 2px 2px 5px var(--shadow-light),
+                inset -3px -3px 7px rgba(0,0,0,0.15),
+                3px 3px 5px var(--shadow-dark);
+            border: 2px solid rgba(0,0,0,0.05);
+        }
+
+        /* 每一行的顏色 (彩虹配色) */
+        .bubble[data-row="0"] { background-color: #ff5f5f; } /* 紅 */
+        .bubble[data-row="1"] { background-color: #ffae42; } /* 橙 */
+        .bubble[data-row="2"] { background-color: #ffff66; } /* 黃 */
+        .bubble[data-row="3"] { background-color: #66ff66; } /* 綠 */
+        .bubble[data-row="4"] { background-color: #42aaff; } /* 藍 */
+        .bubble[data-row="5"] { background-color: #c38fff; } /* 紫 */
+
+        /* 凹下狀態 (已按) */
+        .bubble.popped {
+            /* 讓陰影反轉，看起來像凹進去 */
+            box-shadow: 
+                inset 3px 3px 10px rgba(0,0,0,0.3),
+                inset -2px -2px 5px rgba(255,255,255,0.3);
+            transform: scale(0.95);
+            background-image: linear-gradient(rgba(0,0,0,0.1), rgba(0,0,0,0.1)); /* 稍微變暗 */
+        }
+
+        /* 手機適配 */
+        @media (max-width: 500px) {
+            .pop-it-board {
+                gap: 10px;
+                padding: 15px;
+            }
+            .bubble {
+                width: 45px;
+                height: 45px;
+            }
+        }
+
+        #start-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.5rem;
+            z-index: 100;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="start-overlay">點擊畫面開始 (開啟音效)</div>
+
+    <div class="pop-it-board" id="board">
+        </div>
+
+    <script>
+        const board = document.getElementById('board');
+        const overlay = document.getElementById('start-overlay');
+        const ROWS = 6;
+        const COLS = 6;
+        let poppedCount = 0;
+        let audioCtx;
+
+        // 初始化 Audio Context
+        function initAudio() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // --- 核心：合成「波」的聲音 ---
+        function playPopSound() {
+            if (!audioCtx) return;
+
+            const t = audioCtx.currentTime;
+            
+            // 1. 振盪器 (Oscillator) - 聲音的主體
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain(); // 音量控制
+
+            // 2. 濾波器 (Filter) - 讓聲音聽起來像悶悶的橡膠，而不是尖銳的電子音
+            const filter = audioCtx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 1000; 
+
+            // 連接：振盪器 -> 濾波器 -> 音量 -> 輸出
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            // 3. 頻率變化 (Pitch Drop)
+            // 真正的 Pop 聲是頻率急速下降的
+            // 從 600Hz 瞬間掉到 100Hz
+            osc.frequency.setValueAtTime(600, t);
+            osc.frequency.exponentialRampToValueAtTime(100, t + 0.1);
+            
+            // 4. 音量包絡 (Envelope)
+            // 瞬間變大聲，然後馬上消失 (Short decay)
+            gain.gain.setValueAtTime(0, t);
+            gain.gain.linearRampToValueAtTime(1, t + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+
+            osc.start(t);
+            osc.stop(t + 0.2);
+        }
+
+        // 另一種稍微不同的聲音 (用於反彈或重置)
+        function playResetSound() {
+            if (!audioCtx) return;
+            const t = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle'; // 三角波比較清脆
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.frequency.setValueAtTime(300, t);
+            osc.frequency.linearRampToValueAtTime(600, t + 0.1); // 音調上升
+            gain.gain.setValueAtTime(0, t);
+            gain.gain.linearRampToValueAtTime(0.3, t + 0.05);
+            gain.gain.linearRampToValueAtTime(0, t + 0.2);
+            osc.start(t);
+            osc.stop(t + 0.2);
+        }
+
+        // 生成氣泡
+        function createBoard() {
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    const bubble = document.createElement('div');
+                    bubble.classList.add('bubble');
+                    bubble.dataset.row = r; // 用於上色
+                    
+                    // 點擊事件 (支援滑鼠與觸控)
+                    bubble.addEventListener('pointerdown', (e) => {
+                        e.preventDefault(); // 防止選取文字
+                        toggleBubble(bubble);
+                    });
+
+                    board.appendChild(bubble);
+                }
+            }
+        }
+
+        // 按壓氣泡邏輯
+        function toggleBubble(bubble) {
+            // 如果已經按過了，就不做動作 (模擬真實玩具，按下去就下去了)
+            // 如果你想讓它能反覆按，可以把下面這行去掉
+            if (bubble.classList.contains('popped')) return;
+
+            bubble.classList.add('popped');
+            playPopSound(); // 播放波波聲
+            
+            // 震動回饋 (僅限 Android 手機)
+            if (navigator.vibrate) navigator.vibrate(20);
+
+            poppedCount++;
+            checkWin();
+        }
+
+        // 檢查是否全部按完
+        function checkWin() {
+            if (poppedCount === ROWS * COLS) {
+                setTimeout(() => {
+                    resetBoard();
+                }, 500);
+            }
+        }
+
+        // 重置 (翻面)
+        function resetBoard() {
+            board.classList.add('flipping'); // 視覺翻轉
+            playResetSound();
+
+            setTimeout(() => {
+                const bubbles = document.querySelectorAll('.bubble');
+                bubbles.forEach(b => b.classList.remove('popped'));
+                poppedCount = 0;
+                board.classList.remove('flipping');
+            }, 300);
+        }
+
+        // 啟動遊戲
+        overlay.addEventListener('click', () => {
+            initAudio();
+            overlay.style.display = 'none';
+            // 播放一個開場聲
+            playPopSound();
+        });
+
+        createBoard();
+
+    </script>
+</body>
+</html>
